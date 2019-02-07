@@ -291,6 +291,9 @@ class CallMe(object):
     def __call__(self, *args, **kwargs):
         return self
 
+    def __getattribute__(self, name):
+        return self
+
 
 class NoKeyErrorDict(dict):
     def __init__(self, globals_, locals_):
