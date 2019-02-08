@@ -50,21 +50,25 @@ template_invisible = """
   node [shape=point style=invisible width=0 height=0];
   invisible_{state_name}"""
 
-template_leaf = "\n{state_name} [label=\"{state_name}\" shape=Mrecord{style} color={color}]"
+template_leaf = "\n{state_name} [label={label} shape=Mrecord{style} color={color}]"
+
+template_leaf_table_label = """\n{state_name} [label=<
+  <table cellborder="0" style="rounded"{bgcolor}>
+    <tr><td>{state_name}</td></tr>
+    <hr/>{on_entry}{on_exit}
+  </table>
+> shape=none margin=0]"""
 
 template_transition = "\n{source} -> {target} [label=\"{label}\"{ltail}{lhead}{dir}{color}]"
 
 
 def visit_state(sc, state_name, configuration=()):
     state = sc.state_for(state_name)
-    color = "black"
-    style = ""
-
-    if state_name in configuration:
-        color = "\"#3399ff\""
-        style = " style=filled"
+    active = state_name in configuration
 
     if isinstance(state, CompositeStateMixin):
+        color = "\"#3399ff\"" if active else "black"
+
         if isinstance(state, CompoundState):
             style = " style=rounded"
             initial = template_initial.format(state_name=state_name, initial_state=state.initial)
@@ -91,7 +95,24 @@ def visit_state(sc, state_name, configuration=()):
         return template_cluster.format(state_name=state_name, initial=initial, inner_nodes=inner_nodes,
                                        style=style, additional_points=additional_points, color=color)
 
-    return template_leaf.format(state_name=state_name, style=style, color=color)
+    if state.on_entry or state.on_exit:
+        bgcolor = " bgcolor=\"3399ff\"" if active else ""
+        on_entry = "\n    <tr><td>entry / {}</td></tr>".format(state.on_entry) if state.on_entry else ""
+        on_exit = "\n    <tr><td>exit / {}</td></tr>".format(state.on_exit) if state.on_exit else ""
+
+        return template_leaf_table_label.format(state_name=state_name, bgcolor=bgcolor,
+                                                on_entry=on_entry, on_exit=on_exit)
+    else:
+        if active:
+            color = "\"3399ff\""
+            style = "style=filled"
+        else:
+            color = "black"
+            style = ""
+
+        label = "\"{}\"".format(state_name)
+
+        return template_leaf.format(state_name=state_name, label=label, style=style, color=color)
 
 
 def get_valid_nodes(sc, state_name):
