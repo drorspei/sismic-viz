@@ -6,7 +6,7 @@ import pprint
 import argparse
 import webbrowser
 from flask import Flask, send_file, request
-from sismic.io import import_from_yaml
+from sismic.io import import_from_yaml, export_to_plantuml
 from sismic.model import Event, CompositeStateMixin, CompoundState
 from sismic.interpreter import Interpreter
 import tempfile
@@ -400,7 +400,7 @@ def main():
                        help="Runs input file in a browser.")
     group.add_argument('-o', type=str, dest="output_file", help="Path to output dot file.")
 
-    parser.add_argument('-T', type=str, default="dot", dest="file_type",
+    parser.add_argument('-T', type=str, default="", dest="file_type",
                         help="File type for output, if not in interactive mode. "
                              "If dot, produces dot file, others calls dot with \"-T{type}\"")
 
@@ -424,16 +424,21 @@ def main():
         run_interactive(args.input_file)
     else:
         sc = import_from_yaml(filepath=args.input_file)
-        dot = export_to_dot(sc=sc, include_guards=args.include_guards, include_actions=args.include_actions,
-                            edge_fontsize=args.trans_font_size)
-        if args.file_type == "dot":
-            open(args.output_file, "w").write(dot)
+
+        if args.file_type == "puml":
+            export_to_plantuml(sc, filepath=args.output_file)
         else:
-            with tempfile.NamedTemporaryFile() as f:
-                f.write(dot)
-                f.flush()
-                os.system("dot -T{file_type} {inpath} -o {outpath}".format(file_type=args.file_type, inpath=f.name,
-                                                                           outpath=args.output_file))
+            dot = export_to_dot(sc=sc, include_guards=args.include_guards, include_actions=args.include_actions,
+                                edge_fontsize=args.trans_font_size)
+
+            if args.file_type == "dot":
+                open(args.output_file, "w").write(dot)
+            else:
+                with tempfile.NamedTemporaryFile() as f:
+                    f.write(dot)
+                    f.flush()
+                    os.system("dot -T{file_type} {inpath} -o {outpath}".format(file_type=args.file_type, inpath=f.name,
+                                                                            outpath=args.output_file))
 
 
 if __name__ == '__main__':
