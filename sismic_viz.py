@@ -16,6 +16,7 @@ yaml_filepath = None
 imagefile_path = ""
 interp = None  # type: Interpreter
 config = {
+    "file_type": "dot",
     "edge_fontsize": 14,
     "include_guards": True,
     "include_actions": True,
@@ -291,13 +292,19 @@ def get_flask_app():
 def create_image(interpreter):
     global config
     with tempfile.NamedTemporaryFile() as f:
-        f.write(export_to_dot(interpreter.statechart,
-                              edge_fontsize=config["edge_fontsize"],
-                              include_guards=config["include_guards"],
-                              include_actions=config["include_actions"],
-                              configuration=interpreter.configuration))
-        f.flush()
-        os.system("dot -Tpng {inpath} -o {outpath}".format(inpath=f.name, outpath=imagefile_path))
+        if config["file_type"] == "dot":
+            output = export_to_dot(interpreter.statechart,
+                                edge_fontsize=config["edge_fontsize"],
+                                include_guards=config["include_guards"],
+                                include_actions=config["include_actions"],
+                                configuration=interpreter.configuration)
+            f.write(output)
+            f.flush()
+            os.system("dot -Tpng {inpath} -o {outpath}".format(inpath=f.name, outpath=imagefile_path))
+        else:
+            output = export_to_plantuml(interpreter.statechart)
+            f.write(output)
+            f.flush()
 
 
 def create_interp():
@@ -400,9 +407,10 @@ def main():
                        help="Runs input file in a browser.")
     group.add_argument('-o', type=str, dest="output_file", help="Path to output dot file.")
 
-    parser.add_argument('-T', type=str, default="", dest="file_type",
+    parser.add_argument('-T', type=str, default="dot", dest="file_type",
                         help="File type for output, if not in interactive mode. "
-                             "If dot, produces dot file, others calls dot with \"-T{type}\"")
+                             "If dot, produces dot file, others calls dot with \"-T{type}\". "
+                             "If in interactive mode, the options are \"dot\" or \"puml\".")
 
     parser.add_argument("--no-guards", action="store_false", dest="include_guards",
                         help="Don't show transition guards")
@@ -420,6 +428,7 @@ def main():
         config["include_guards"] = args.include_guards
         config["include_actions"] = args.include_actions
         config["edge_fontsize"] = args.trans_font_size
+        config["file_type"] = args.file_type
 
         run_interactive(args.input_file)
     else:
