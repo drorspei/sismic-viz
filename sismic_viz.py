@@ -6,6 +6,8 @@ import shutil
 import pprint
 import argparse
 import webbrowser
+from contextlib import contextmanager
+
 from flask import Flask, send_file, request
 from sismic.io import import_from_yaml, export_to_plantuml
 from sismic.model import Event, CompositeStateMixin, CompoundState
@@ -324,29 +326,55 @@ def create_image(statechart, in_states, configuration, imagepath):
 
 template_bound_doc = """
 <html>
-    <head><meta http-equiv="refresh" content="1; URL=/"></head>
+    <head>{refresh_head}</head>
     <body>
-        clock: {clock_time:10.3f}<br/>{states}<br/><a href=\"/shutdown\">shutdown server</a>
+        clock: {clock_time:10.3f}{stopped}<br/>{states}<br/><a href=\"/shutdown\">shutdown server</a>
         <br/>
         <img src=\"statechart.svg?{timestamp}\" style=\"max-width:100%; height:auto;\"/>
+        <br/>
+{history}
     </body>
 </html>
 """
 
 
-def server_to_bind(statechart, open_browser=True, port=5000):
-    """
-    Starts a background flask server that displays the statechart, and returns a callback to attach to an interpreter.
-    The displayed statechart is continuously updated to show the interpreter configuartion, as received through the
-    callback calls.
+template_refresh_head = "<meta http-equiv=\"refresh\" content=\"1; URL=/\">"
 
-    :param sismic.model.StateChart statechart: Statechart to display.
+
+template_bound_history = "clock: {clock_time:10.3f}, events: {events}, in states: {states}"
+
+
+def shrink_list(l):
+    if l:
+        ll = [[l[0], 1]]
+        for elem in l[1:]:
+            if elem == ll[-1][0]:
+                ll[-1][1] += 1
+            else:
+                ll.append([elem, 1])
+        return ", ".join(elem if times == 1 else "{} x {}".format(elem, times) for elem, times in ll)
+    else:
+        return ""
+
+
+@contextmanager
+def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1.):
+    """
+    Starts a background flask server that displays the statechart, and returns a context manager that yields a callback
+    to attach to an interpreter. The displayed statechart is continuously updated to show the interpreter configuartion,
+    as received through the callback calls.
+
+    :param sismic.model.Statechart statechart: Statechart to display.
     :param bool open_browser: Whether to open a browser for you.
     :param int port: Port to use for server.
+    :param float time_factor: Divide time clock by this number.
     :return: Callback for attaching to interpreter.
-    :rtype: (sismic.model.MetaEvant) -> None
+    :rtype: (sismic.model.MetaEvent) -> None
     """
-    configuration = []
+    configuration = set()
+    last_printed_configuration = set()
+    history = []
+    events = []
     clock_time = [0]
 
     def callback(metaevent):
@@ -354,13 +382,25 @@ def server_to_bind(statechart, open_browser=True, port=5000):
         :type metaevent: sismic.model.MetaEvent
         """
         if metaevent.name == "state entered":
-            configuration.append(metaevent.state)
+            configuration.add(metaevent.state)
         elif metaevent.name == "state exited":
             configuration.remove(metaevent.state)
+        elif metaevent.name == "event consumed" and metaevent.event.name:
+            events.append(metaevent.event.name)
         elif metaevent.name == "step started":
             clock_time[0] = metaevent.time
+            if configuration != last_printed_configuration:
+                history.append(template_bound_history.format(clock_time=clock_time[0] / time_factor,
+                                                             events=shrink_list(events),
+                                                             states=", ".join(configuration)))
+                last_printed_configuration.clear()
+                last_printed_configuration.update(configuration)
+                events[:] = []
 
-    def background_server():
+    def background_server(stop_event):
+        """
+        :type stop_event: threading.Event
+        """
         global imagefile_path
 
         with tempfile.NamedTemporaryFile() as imagefile:
@@ -369,15 +409,21 @@ def server_to_bind(statechart, open_browser=True, port=5000):
 
             @app.route("/")
             def index():
+                return get_page()
+
+            def get_page():
                 create_image(statechart, configuration, {
                     "file_type": "dot",
                     "edge_fontsize": 14,
                     "include_guards": False,
                     "include_actions": False,
                 }, imagefile_path)
-                return template_bound_doc.format(clock_time=clock_time[0],
+                return template_bound_doc.format(refresh_head="" if stop_event.is_set() else template_refresh_head,
+                                                 clock_time=clock_time[0] / time_factor,
+                                                 stopped=" STOPPED" if stop_event.is_set() else "",
                                                  states=", ".join(configuration),
-                                                 timestamp=time.time())
+                                                 timestamp=time.time(),
+                                                 history="<br/>\n".join(history[::-1]))
 
             def shutdown_server():
                 func = request.environ.get('werkzeug.server.shutdown')
@@ -392,16 +438,20 @@ def server_to_bind(statechart, open_browser=True, port=5000):
             @app.route('/shutdown')
             def shutdown():
                 shutdown_server()
-                return 'Server shutting down...'
+                return get_page()
 
             if open_browser:
                 webbrowser.open_new("http://127.0.0.1:{port}".format(port=port))
             app.run(host='0.0.0.0', port=port, threaded=False)
 
     import threading
-    threading.Thread(target=background_server).start()
+    _stop_event = threading.Event()
+    threading.Thread(target=background_server, args=(_stop_event,)).start()
 
-    return callback
+    try:
+        yield callback
+    finally:
+        _stop_event.set()
 
 
 def create_interp():
