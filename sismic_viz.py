@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import os
 import time
+import shutil
 import pprint
 import argparse
 import webbrowser
@@ -97,7 +98,7 @@ def visit_state(sc, state_name, configuration=()):
                                        style=style, additional_points=additional_points, color=color)
 
     if state.on_entry or state.on_exit:
-        bgcolor = " bgcolor=\"3399ff\"" if active else ""
+        bgcolor = " bgcolor=\"#3399ff\"" if active else ""
         on_entry = "\n    <tr><td>entry / {}</td></tr>".format(state.on_entry) if state.on_entry else ""
         on_exit = "\n    <tr><td>exit / {}</td></tr>".format(state.on_exit) if state.on_exit else ""
 
@@ -105,8 +106,8 @@ def visit_state(sc, state_name, configuration=()):
                                                 on_entry=on_entry, on_exit=on_exit)
     else:
         if active:
-            color = "\"3399ff\""
-            style = "style=filled"
+            color = "\"#3399ff\""
+            style = " style=filled"
         else:
             color = "black"
             style = ""
@@ -120,7 +121,9 @@ def get_valid_nodes(sc, state_name):
     state = sc.state_for(state_name)
 
     if isinstance(state, CompositeStateMixin):
-        return "invisible_{}".format(state_name), "cluster_{}".format(state_name)
+        return "invisible_{}".format(state_name), "cluster_{}".format(
+            state_name
+        )
 
     return state_name, state_name
 
@@ -164,9 +167,9 @@ def get_edges(sc, include_guards, include_actions, configuration=()):
             if transition.target in sc.descendants_for(state_name):
                 out_point = "point_{}_{}".format(state_name, ind)
                 edges.append(get_edge_text(source=valid_source, target=out_point,
-                                           ltail=source, lhead=target, label="", dir_=" dir=none", color=color))
+                                           ltail=source, lhead=out_point, label="", dir_=" dir=none", color=color))
                 edges.append(get_edge_text(source=out_point, target=valid_target,
-                                           ltail=source, lhead=target, label=label, dir_="", color=color))
+                                           ltail=out_point, lhead=target, label=label, dir_="", color=color))
             else:
                 edges.append(get_edge_text(source=valid_source, target=valid_target,
                                            ltail=source, lhead=target, label=label, dir_="", color=color))
@@ -195,7 +198,7 @@ template_html_doc = """<html>
     </head>
     <body>
         <div>
-            <img src="statechart.png?{timestamp}" style="max-width:100%; height:auto;"/>
+            <img src="statechart.svg?{timestamp}" style="max-width:100%; height:auto;"/>
         </div>
         <div>
             <form method="get">
@@ -206,13 +209,15 @@ template_html_doc = """<html>
 {font_options}
                 </select>,
                 <input type="checkbox" name="disable_keyerror" value="True"{disable_keyerror_checked}/>
-                Disable KeyErrors in Actions
+                Disable KeyErrors in Actions and Guards
                 <input type="submit" name="fromform" value="update"/>
             </form>
         </div>
         <div>
             Click to trigger an event:<br/>
+            <form method="get">
 {events}
+            </form>
         </div>
         <br/>
         <div>
@@ -227,7 +232,8 @@ template_html_doc = """<html>
 </html>
 """
 
-template_event = "            <a href=\"/?event={event}\">{event_repr}</a>"
+template_event = "            <button type=\"submit\" name=\"event\" value=\"{event}\">{event_repr}</button>"
+template_guard = "            <input type=\"checkbox\" name=\"guard\" value=\"{guard}\">{guard_repr}</button>"
 
 
 def get_font_size_options_html():
@@ -275,36 +281,49 @@ def get_flask_app():
             include_actions_checked=" checked" if config["include_actions"] else "",
             disable_keyerror_checked=" checked" if config["disable_keyerror"] else "",
             font_options=get_font_size_options_html(),
-            events="<br/>\n".join(template_event.format(event=transition.event, event_repr=transition.event)
-                                  for state in interp.configuration
-                                  for transition in interp.statechart.transitions_from(state)
-                                  if transition.event),
+            events="<br/>\n".join(sorted(set(
+                template_event.format(event=transition.event, event_repr=transition.event)
+                for state in interp.configuration
+                for transition in interp.statechart.transitions_from(state)
+                if transition.event
+            ))),
             last_output="<br/>\n".join(pprint.pformat(config["history"][::-1]).splitlines())
         )
 
-    @app.route('/statechart.png')
+    @app.route('/statechart.svg')
     def get_statechart_graph():
-        return send_file(imagefile_path, mimetype="image/png")
+        return send_file(imagefile_path, mimetype="image/svg+xml")
 
     return app
 
 
 def create_image(interpreter):
     global config
-    with tempfile.NamedTemporaryFile() as f:
-        if config["file_type"] == "dot":
-            output = export_to_dot(interpreter.statechart,
-                                edge_fontsize=config["edge_fontsize"],
-                                include_guards=config["include_guards"],
-                                include_actions=config["include_actions"],
-                                configuration=interpreter.configuration)
-            f.write(output)
-            f.flush()
-            os.system("dot -Tpng {inpath} -o {outpath}".format(inpath=f.name, outpath=imagefile_path))
-        else:
+    if config["file_type"] == "dot":
+        with tempfile.NamedTemporaryFile() as f:
+            if config["file_type"] == "dot":
+                output = export_to_dot(interpreter.statechart,
+                                    edge_fontsize=config["edge_fontsize"],
+                                    include_guards=config["include_guards"],
+                                    include_actions=config["include_actions"],
+                                    configuration=interpreter.configuration)
+                f.write(output)
+                f.flush()
+                open("/tmp/hello.dot", "wb").write(output)
+                os.system("dot -Tsvg {inpath} -o {outpath}".format(inpath=f.name, outpath=imagefile_path))
+    else:
+        dirname = tempfile.mkdtemp()
+        try:
             output = export_to_plantuml(interpreter.statechart)
-            f.write(output)
-            f.flush()
+            fname = os.path.join(dirname, "graph.puml")
+            with open(fname, "wb") as f:
+                f.write(output)
+                f.flush()
+            os.system("plantuml {inpath} -o {outpath} -tsvg".format(inpath=fname, outpath=dirname))
+            open(imagefile_path, "wb").write(open(os.path.join(dirname, "graph.svg"), "rb").read())
+        finally:
+            pass
+            # shutil.rmtree(dirname)
 
 
 def create_interp():
@@ -377,11 +396,26 @@ def disable_keyerror_in_actions():
 
         interp._evaluator._execute_code = MethodType(new_execute_code, interp._evaluator)
 
+    if not hasattr(interp._evaluator, "old_eval_code"):
+        interp._evaluator.old_eval_code = interp._evaluator._evaluate_code
+
+        def new_eval_code(self, code, **kwargs):
+            try:
+                return self.old_eval_code(code, **kwargs)
+            except CodeEvaluationError:
+                return False
+
+        interp._evaluator._evaluate_code = MethodType(new_eval_code, interp._evaluator)
+
 
 def enable_keyerror_in_actions():
     if hasattr(interp._evaluator, "old_execute_code"):
         interp._evaluator._execute_code = interp._evaluator.old_execute_code
         del interp._evaluator.old_execute_code
+
+    if hasattr(interp._evaluator, "old_eval_code"):
+        interp._evaluator._evaluate_code = interp._evaluator.old_val_code
+        del interp._evaluator.old_eal_code
 
 
 def run_interactive(filepath):
