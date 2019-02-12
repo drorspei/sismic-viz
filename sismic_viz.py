@@ -16,7 +16,7 @@ import tempfile
 yaml_filepath = None
 imagefile_path = ""
 interp = None  # type: Interpreter
-config = {
+global_config = {
     "file_type": "dot",
     "edge_fontsize": 14,
     "include_guards": True,
@@ -239,7 +239,7 @@ template_guard = "            <input type=\"checkbox\" name=\"guard\" value=\"{g
 def get_font_size_options_html():
     return "\n".join(
         template_option.format(
-            selected=" selected" if config["edge_fontsize"] == size else "",
+            selected=" selected" if global_config["edge_fontsize"] == size else "",
             size=size
         )
         for size in range(6, 16, 2)
@@ -251,35 +251,35 @@ def get_flask_app():
 
     @app.route('/', methods=['GET'])
     def display_interactive_statechart():
-        global config
+        global global_config
 
         if request.args.get("reset", False, bool):
             create_interp()
 
         if request.args.get("fromform", False):
-            config["edge_fontsize"] = request.args.get("edge_fontsize", 14, int)
-            config["include_guards"] = request.args.get("include_guards", False, bool)
-            config["include_actions"] = request.args.get("include_actions", False, bool)
-            config["disable_keyerror"] = request.args.get("disable_keyerror", False, bool)
+            global_config["edge_fontsize"] = request.args.get("edge_fontsize", 14, int)
+            global_config["include_guards"] = request.args.get("include_guards", False, bool)
+            global_config["include_actions"] = request.args.get("include_actions", False, bool)
+            global_config["disable_keyerror"] = request.args.get("disable_keyerror", False, bool)
 
-        if config["disable_keyerror"]:
+        if global_config["disable_keyerror"]:
             disable_keyerror_in_actions()
         else:
             enable_keyerror_in_actions()
 
         event = request.args.get('event', '', str)
         if event:
-            config["history"].append("<b>Triggered Event: <u>\"{}\"</u></b>".format(event))
+            global_config["history"].append("<b>Triggered Event: <u>\"{}\"</u></b>".format(event))
             for macro_step in interp.queue(Event(event)).execute():
-                config["history"].extend(macro_step.steps)
+                global_config["history"].extend(macro_step.steps)
 
-        create_image(interp)
+        create_image(interp.statechart, interp.configuration, global_config, imagefile_path)
 
         return template_html_doc.format(
             timestamp=time.time(),
-            include_guards_checked=" checked" if config["include_guards"] else "",
-            include_actions_checked=" checked" if config["include_actions"] else "",
-            disable_keyerror_checked=" checked" if config["disable_keyerror"] else "",
+            include_guards_checked=" checked" if global_config["include_guards"] else "",
+            include_actions_checked=" checked" if global_config["include_actions"] else "",
+            disable_keyerror_checked=" checked" if global_config["disable_keyerror"] else "",
             font_options=get_font_size_options_html(),
             events="<br/>\n".join(sorted(set(
                 template_event.format(event=transition.event, event_repr=transition.event)
@@ -287,7 +287,7 @@ def get_flask_app():
                 for transition in interp.statechart.transitions_from(state)
                 if transition.event
             ))),
-            last_output="<br/>\n".join(pprint.pformat(config["history"][::-1]).splitlines())
+            last_output="<br/>\n".join(pprint.pformat(global_config["history"][::-1]).splitlines())
         )
 
     @app.route('/statechart.svg')
@@ -297,24 +297,23 @@ def get_flask_app():
     return app
 
 
-def create_image(interpreter):
-    global config
-    if config["file_type"] == "dot":
+def create_image(statechart, in_states, configuration, imagepath):
+    if configuration["file_type"] == "dot":
         with tempfile.NamedTemporaryFile() as f:
-            if config["file_type"] == "dot":
-                output = export_to_dot(interpreter.statechart,
-                                    edge_fontsize=config["edge_fontsize"],
-                                    include_guards=config["include_guards"],
-                                    include_actions=config["include_actions"],
-                                    configuration=interpreter.configuration)
+            if configuration["file_type"] == "dot":
+                output = export_to_dot(statechart,
+                                       edge_fontsize=configuration["edge_fontsize"],
+                                       include_guards=configuration["include_guards"],
+                                       include_actions=configuration["include_actions"],
+                                       configuration=in_states)
                 f.write(output)
                 f.flush()
                 open("/tmp/hello.dot", "wb").write(output)
-                os.system("dot -Tsvg {inpath} -o {outpath}".format(inpath=f.name, outpath=imagefile_path))
+                os.system("dot -Tsvg {inpath} -o {outpath}".format(inpath=f.name, outpath=imagepath))
     else:
         dirname = tempfile.mkdtemp()
         try:
-            output = export_to_plantuml(interpreter.statechart)
+            output = export_to_plantuml(statechart)
             fname = os.path.join(dirname, "graph.puml")
             with open(fname, "wb") as f:
                 f.write(output)
@@ -322,8 +321,72 @@ def create_image(interpreter):
             os.system("plantuml {inpath} -o {outpath} -tsvg".format(inpath=fname, outpath=dirname))
             open(imagefile_path, "wb").write(open(os.path.join(dirname, "graph.svg"), "rb").read())
         finally:
-            pass
-            # shutil.rmtree(dirname)
+            shutil.rmtree(dirname)
+
+
+template_bound_doc = """
+<html>
+    <head><meta http-equiv="refresh" content="1; URL=/"></head>
+    <body>
+        clock: {clock_time:10.3f}<br/>{states}<br/><a href=\"/shutdown\">shutdown server</a>
+        <br/>
+        <img src=\"statechart.svg?{timestamp}\" style=\"max-width:100%; height:auto;\"/>
+    </body>
+</html>
+"""
+
+
+def server_to_bind(statechart):
+    configuration = []
+    clock_time = [0]
+
+    def callback(metaevent):
+        """
+        :type metaevent: Event
+        """
+        if metaevent.name == "state entered":
+            configuration.append(metaevent.state)
+        elif metaevent.name == "state exited":
+            configuration.remove(metaevent.state)
+        elif metaevent.name == "step started":
+            clock_time[0] = metaevent.time
+
+    def background_server():
+        global imagefile_path
+
+        with tempfile.NamedTemporaryFile() as imagefile:
+            imagefile_path = imagefile.name
+            app = Flask(__name__)
+
+            @app.route("/")
+            def index():
+                create_image(statechart, configuration, global_config, imagefile_path)
+                return template_bound_doc.format(clock_time=clock_time[0],
+                                                 states=", ".join(configuration),
+                                                 timestamp=time.time())
+
+            def shutdown_server():
+                func = request.environ.get('werkzeug.server.shutdown')
+                if func is None:
+                    raise RuntimeError('Not running with the Werkzeug Server')
+                func()
+
+            @app.route('/statechart.svg')
+            def get_statechart_graph():
+                return send_file(imagefile_path, mimetype="image/svg+xml")
+
+            @app.route('/shutdown')
+            def shutdown():
+                shutdown_server()
+                return 'Server shutting down...'
+
+            webbrowser.open_new("http://127.0.0.1:5000")
+            app.run(host='0.0.0.0', threaded=False)
+
+    import threading
+    threading.Thread(target=background_server).start()
+
+    return callback
 
 
 def create_interp():
@@ -431,7 +494,7 @@ def run_interactive(filepath):
 
 
 def main():
-    global config
+    global global_config
 
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", type=str, help="Path to input yaml file.")
@@ -459,10 +522,10 @@ def main():
     args = parser.parse_args()
 
     if args.interactive:
-        config["include_guards"] = args.include_guards
-        config["include_actions"] = args.include_actions
-        config["edge_fontsize"] = args.trans_font_size
-        config["file_type"] = args.file_type
+        global_config["include_guards"] = args.include_guards
+        global_config["include_actions"] = args.include_actions
+        global_config["edge_fontsize"] = args.trans_font_size
+        global_config["file_type"] = args.file_type
 
         run_interactive(args.input_file)
     else:
