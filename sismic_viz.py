@@ -12,7 +12,6 @@ from sismic.model import Event, CompositeStateMixin, CompoundState
 from sismic.interpreter import Interpreter
 import tempfile
 
-
 yaml_filepath = None
 imagefile_path = ""
 interp = None  # type: Interpreter
@@ -186,7 +185,6 @@ def export_to_dot(sc, include_guards=True, include_actions=True, edge_fontsize=1
 
 template_option = """                    <option{selected}>{size}</option>"""
 
-
 template_html_doc = """<html>
     <head>
         <title>Sismic Interactive Interpreter</title>
@@ -336,13 +334,24 @@ template_bound_doc = """
 """
 
 
-def server_to_bind(statechart):
+def server_to_bind(statechart, open_browser=True, port=5000):
+    """
+    Starts a background flask server that displays the statechart, and returns a callback to attach to an interpreter.
+    The displayed statechart is continuously updated to show the interpreter configuartion, as received through the
+    callback calls.
+
+    :param sismic.model.StateChart statechart: Statechart to display.
+    :param bool open_browser: Whether to open a browser for you.
+    :param int port: Port to use for server.
+    :return: Callback for attaching to interpreter.
+    :rtype: (sismic.model.MetaEvant) -> None
+    """
     configuration = []
     clock_time = [0]
 
     def callback(metaevent):
         """
-        :type metaevent: Event
+        :type metaevent: sismic.model.MetaEvent
         """
         if metaevent.name == "state entered":
             configuration.append(metaevent.state)
@@ -360,7 +369,12 @@ def server_to_bind(statechart):
 
             @app.route("/")
             def index():
-                create_image(statechart, configuration, global_config, imagefile_path)
+                create_image(statechart, configuration, {
+                    "file_type": "dot",
+                    "edge_fontsize": 14,
+                    "include_guards": False,
+                    "include_actions": False,
+                }, imagefile_path)
                 return template_bound_doc.format(clock_time=clock_time[0],
                                                  states=", ".join(configuration),
                                                  timestamp=time.time())
@@ -380,8 +394,9 @@ def server_to_bind(statechart):
                 shutdown_server()
                 return 'Server shutting down...'
 
-            webbrowser.open_new("http://127.0.0.1:5000")
-            app.run(host='0.0.0.0', threaded=False)
+            if open_browser:
+                webbrowser.open_new("http://127.0.0.1:{port}".format(port=port))
+            app.run(host='0.0.0.0', port=port, threaded=False)
 
     import threading
     threading.Thread(target=background_server).start()
@@ -452,7 +467,7 @@ def disable_keyerror_in_actions():
             exposed_context.update(additional_context if additional_context is not None else {})
 
             try:
-                exec(compiled_code, NoKeyErrorDict(exposed_context, self._context))  # type: ignore
+                exec (compiled_code, NoKeyErrorDict(exposed_context, self._context))  # type: ignore
                 return self._event_provider.pending
             except Exception as e:
                 raise_from(CodeEvaluationError('"{}" occurred while executing "{}"'.format(e, code)), e)
@@ -486,7 +501,7 @@ def run_interactive(filepath):
 
     yaml_filepath = filepath
     create_interp()
-    
+
     with tempfile.NamedTemporaryFile() as imagefile:
         imagefile_path = imagefile.name
         webbrowser.open_new("http://127.0.0.1:5000")
@@ -544,7 +559,7 @@ def main():
                     f.write(dot)
                     f.flush()
                     os.system("dot -T{file_type} {inpath} -o {outpath}".format(file_type=args.file_type, inpath=f.name,
-                                                                            outpath=args.output_file))
+                                                                               outpath=args.output_file))
 
 
 if __name__ == '__main__':
