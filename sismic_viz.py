@@ -148,6 +148,9 @@ def get_edges(sc, include_guards, include_actions, configuration=()):
     edges = []
     for state_name in sc.states:
         for ind, transition in enumerate(sc.transitions_from(state_name)):
+            if not transition.target:
+                continue
+            
             valid_source, source = get_valid_nodes(sc, transition.source)
             valid_target, target = get_valid_nodes(sc, transition.target)
 
@@ -254,7 +257,9 @@ def get_flask_app():
         global global_config
 
         if request.args.get("reset", False, bool):
-            create_interp()
+            just_created = True
+        else:
+            just_created = False
 
         if request.args.get("fromform", False):
             global_config["edge_fontsize"] = request.args.get("edge_fontsize", 14, int)
@@ -266,6 +271,9 @@ def get_flask_app():
             disable_keyerror_in_actions()
         else:
             enable_keyerror_in_actions()
+
+        if just_created:
+            interp.execute()
 
         event = request.args.get('event', '', str)
         if event:
@@ -358,7 +366,7 @@ def shrink_list(l):
 
 
 @contextmanager
-def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1.):
+def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1., logging=True):
     """
     Starts a background flask server that displays the statechart, and returns a context manager that yields a callback
     to attach to an interpreter. The displayed statechart is continuously updated to show the interpreter configuartion,
@@ -406,6 +414,9 @@ def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1.):
         with tempfile.NamedTemporaryFile() as imagefile:
             imagefile_path = imagefile.name
             app = Flask(__name__)
+            import logging as logging_
+            log = logging_.getLogger('werkzeug')
+            log.disabled = not logging
 
             @app.route("/")
             def index():
@@ -451,7 +462,8 @@ def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1.):
     try:
         yield callback
     finally:
-        _stop_event.set()
+        # _stop_event.set()
+        print("exitting sismic viz server")
 
 
 def create_interp():
@@ -459,7 +471,7 @@ def create_interp():
 
     daemon = import_from_yaml(filepath=yaml_filepath)
     interp = Interpreter(daemon)
-    interp.execute()
+    return interp
 
 
 class CallMe(object):
@@ -550,7 +562,9 @@ def run_interactive(filepath):
     global imagefile_path, yaml_filepath
 
     yaml_filepath = filepath
-    create_interp()
+    interp = create_interp()
+    disable_keyerror_in_actions()
+    interp.execute()
 
     with tempfile.NamedTemporaryFile() as imagefile:
         imagefile_path = imagefile.name
