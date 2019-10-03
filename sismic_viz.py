@@ -334,19 +334,32 @@ def create_image(statechart, in_states, configuration, imagepath):
 
 template_bound_doc = """
 <html>
-    <head>{refresh_head}</head>
+    <head>{refresh_head}    </head>
     <body>
-        clock: {clock_time:10.3f}{stopped}<br/>{states}<br/><a href=\"/shutdown\">shutdown server</a>
+        clock: <div id="clock">{clock_time:10.3f}{stopped}</div><br/>{states}<br/><a href=\"/shutdown?{timestamp}\">shutdown server</a>
         <br/>
-        <img src=\"statechart.svg?{timestamp}\" style=\"max-width:100%; height:auto;\"/>
+        <img src=\"statechart.svg?{timestamp}\" id=\"statechart\" style=\"max-width:100%; height:auto;\"/>
         <br/>
+        <div id="history">
 {history}
+        </div>
     </body>
 </html>
 """
 
 
-template_refresh_head = "<meta http-equiv=\"refresh\" content=\"1; URL=/\">"
+# template_refresh_head = "<meta http-equiv=\"refresh\" content=\"1; URL=/\">"
+template_refresh_head = """
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+        <script>
+            setInterval(function() {
+                var myImageElement = document.getElementById('statechart');
+                myImageElement.src = 'statechart.svg?rand=' + Math.random();
+                $('#clock').load("clock?rand=" + Math.random());
+                $('#history').load("history?rand=" + Math.random());
+            }, 1000);
+        </script>
+"""
 
 
 template_bound_history = "clock: {clock_time:10.3f}, events: {events}, in states: {states}"
@@ -444,7 +457,24 @@ def server_to_bind(statechart, open_browser=True, port=5000, time_factor=1., log
 
             @app.route('/statechart.svg')
             def get_statechart_graph():
+                create_image(statechart, configuration, {
+                    "file_type": "dot",
+                    "edge_fontsize": 14,
+                    "include_guards": False,
+                    "include_actions": False,
+                }, imagefile_path)
                 return send_file(imagefile_path, mimetype="image/svg+xml")
+
+            @app.route("/clock")
+            def get_clock():
+                return "{clock_time:10.3f}{stopped}".format(
+                    clock_time=clock_time[0] / time_factor,
+                    stopped=" STOPPED" if stop_event.is_set() else ""
+                )
+
+            @app.route("/history")
+            def get_history():
+                return "<br/>\n".join(history[::-1])
 
             @app.route('/shutdown')
             def shutdown():
